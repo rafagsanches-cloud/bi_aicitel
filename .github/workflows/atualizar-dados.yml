@@ -1,0 +1,50 @@
+# Atualiza todo mês os dados do painel com a base oficial do CNPJ da Receita Federal.
+# Roda nos dias 5 e 20 (06h17, horário de Brasília) e só grava algo quando a Receita
+# publica uma base nova. Também pode ser disparada à mão na aba Actions do GitHub.
+name: Atualizar dados do painel
+
+on:
+  schedule:
+    - cron: "17 9 5,20 * *"
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - preparar_dados.py
+      - .github/workflows/atualizar-dados.yml
+
+permissions:
+  contents: write
+
+concurrency:
+  group: atualizar-dados
+  cancel-in-progress: false
+
+jobs:
+  atualizar:
+    runs-on: ubuntu-latest
+    timeout-minutes: 300
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Instalar bibliotecas
+        run: pip install pandas pyarrow requests
+
+      - name: Baixar e tratar a base mais recente da Receita
+        run: python preparar_dados.py --so-se-houver-base-nova
+
+      - name: Publicar os dados novos
+        run: |
+          git add dados/
+          if git diff --cached --quiet; then
+            echo "Nenhuma mudança nos dados."
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git commit -m "Atualiza dados do painel (base $(jq -r .base_receita dados/qualidade.json) da Receita)"
+          git push

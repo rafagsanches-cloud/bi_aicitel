@@ -57,6 +57,9 @@ def carregar():
 
 emp, cidade, qual = carregar()
 referencia = pd.Timestamp(qual["data_referencia"])
+TEM_REGIME = "regime" in emp.columns  # só a base oficial da Receita traz porte, Simples e MEI
+REGIMES = ["MEI", "Simples Nacional (exceto MEI)", "Fora do Simples"]
+PORTES = ["ME", "EPP", "Demais", "Não informado"]
 
 # ---------------------------------------------------------------- filtros
 with st.sidebar:
@@ -77,6 +80,10 @@ with st.sidebar:
 
     segmentos = sorted(s for s in emp["segmento"].unique() if s != "Contabilidade (concorrência)")
     seg_escolha = st.multiselect("Segmentos", segmentos, placeholder="Todos os segmentos")
+    reg_escolha = []
+    if TEM_REGIME:
+        reg_escolha = st.multiselect("Regime tributário", REGIMES, placeholder="Todos os regimes",
+                                     help="Opção pelo Simples Nacional e pelo MEI, segundo a Receita Federal.")
     incluir_filiais = st.toggle("Incluir filiais", value=False,
                                 help="Filiais costumam ter a contabilidade feita pela matriz.")
 
@@ -91,8 +98,11 @@ with st.sidebar:
         minimo = st.number_input("Mínimo de empresas por atividade", 5, 500, MINIMO_EMPRESAS, 5)
 
     st.divider()
-    st.caption(f"Base CNPJ da Receita Federal com dados até {referencia:%d/%m/%Y}. "
-               "Estabelecimentos ativos de 71 atividades típicas de pequenos negócios.")
+    base_txt = f"Base {qual['base_receita']} da Receita Federal" if "base_receita" in qual else "Base CNPJ da Receita Federal"
+    atual_txt = (f" Atualizada em {pd.Timestamp(qual['atualizado_em']):%d/%m/%Y}; a atualização é automática todo mês."
+                 if "atualizado_em" in qual else "")
+    st.caption(f"{base_txt}, com dados até {referencia:%d/%m/%Y}. "
+               f"Estabelecimentos ativos de 71 atividades típicas de pequenos negócios.{atual_txt}")
 
 if base.empty:
     st.warning("Nenhuma empresa na seleção. Escolha ao menos um bairro.")
@@ -102,6 +112,8 @@ concorrentes = base[base["concorrente"]]
 dados = base[~base["concorrente"]]
 if seg_escolha:
     dados = dados[dados["segmento"].isin(seg_escolha)]
+if reg_escolha:
+    dados = dados[dados["regime"].isin(reg_escolha)]
 if not incluir_filiais:
     dados = dados[dados["matriz_filial"] == "Matriz"]
 if dados.empty:
@@ -166,6 +178,31 @@ with aba1:
         st.altair_chart((linha + regra + pontos).properties(height=330), width="stretch")
         st.caption("Conta as empresas que continuam ativas hoje, pela data em que entraram em atividade. "
                    "Empresas abertas e já encerradas não aparecem, por isso os anos mais antigos ficam menores.")
+
+    if TEM_REGIME:
+        def barras_categoria(coluna: str, ordem: list[str], titulo: str):
+            cont = dados[coluna].value_counts().reindex(ordem, fill_value=0).reset_index()
+            cont.columns = ["categoria", "empresas"]
+            cont["pct"] = cont["empresas"] / max(cont["empresas"].sum(), 1) * 100
+            cont["rotulo"] = cont.apply(lambda r: f"{br(r.empresas)} ({br(r.pct, 1)}%)", axis=1)
+            base_c = alt.Chart(cont).encode(
+                y=alt.Y("categoria:N", sort=ordem, axis=eixo_cat(limite=220)),
+                x=alt.X("empresas:Q", axis=eixo("Empresas ativas"),
+                        scale=alt.Scale(domain=[0, max(int(cont["empresas"].max() * 1.35), 1)])))
+            barras_c = base_c.mark_bar(color=AZUL, cornerRadiusEnd=4, height={"band": 0.7}).encode(
+                tooltip=[alt.Tooltip("categoria:N", title=titulo), alt.Tooltip("rotulo:N", title="Empresas")])
+            texto = base_c.mark_text(align="left", dx=6, color="#52514e", fontSize=12).encode(text="rotulo:N")
+            return (barras_c + texto).properties(height=46 * len(ordem) + 40)
+
+        col_r, col_p = st.columns(2)
+        with col_r:
+            st.subheader("Regime tributário")
+            st.altair_chart(barras_categoria("regime", REGIMES, "Regime"), width="stretch")
+        with col_p:
+            st.subheader("Porte")
+            st.altair_chart(barras_categoria("porte", PORTES, "Porte"), width="stretch")
+        st.caption("Regime e porte segundo o cadastro da Receita Federal. O MEI também é optante pelo Simples "
+                   "Nacional, mas aparece separado porque o serviço contábil que ele precisa é bem mais simples.")
 
     st.subheader("Atividades com mais empresas")
     top = (dados.groupby(["atividade_resumo", "segmento"]).agg(empresas=("cnpj", "size"), novas=("recente_12m", "sum"))
@@ -249,13 +286,22 @@ with aba3:
                      alt.Tooltip("novas:Q", title="Abertas em 12 meses")])
         st.altair_chart(idx.properties(height=34 * len(top15) + 40), width="stretch")
 
-        st.dataframe(rank[["posicao", "atividade_resumo", "segmento", "volume", "novas", "crescimento", "especializacao", "indice"]],
+        colunas_rank = ["posicao", "atividade_resumo", "segmento", "volume", "novas", "crescimento", "especializacao", "indice"]
+        if TEM_REGIME:
+            mat = dados[dados["matriz_filial"] == "Matriz"]
+            pct = (mat.assign(mei=mat["regime"].eq(REGIMES[0]), sn=mat["regime"].eq(REGIMES[1]))
+                   .groupby("atividade_resumo")[["mei", "sn"]].mean().mul(100).reset_index())
+            rank = rank.merge(pct, on="atividade_resumo", how="left")
+            colunas_rank = colunas_rank[:5] + ["mei", "sn"] + colunas_rank[5:]
+        st.dataframe(rank[colunas_rank],
                      hide_index=True, width="stretch", column_config={
                          "posicao": st.column_config.NumberColumn("#", width="small"),
                          "atividade_resumo": st.column_config.TextColumn("Atividade", width="large"),
                          "segmento": "Segmento",
                          "volume": st.column_config.NumberColumn("Empresas ativas", format="localized"),
                          "novas": st.column_config.NumberColumn("Abertas em 12 meses", format="localized"),
+                         "mei": st.column_config.NumberColumn("% MEI", format="%.0f%%"),
+                         "sn": st.column_config.NumberColumn("% Simples (exceto MEI)", format="%.0f%%"),
                          "crescimento": st.column_config.NumberColumn("Crescimento relativo", format="%.2f",
                                                                       help="Acima de 1 = cresce mais que a média da área."),
                          "especializacao": st.column_config.NumberColumn("Especialização", format="%.2f",
@@ -278,18 +324,21 @@ with aba3:
         lista = dados[dados["atividade_resumo"].isin(alvo) & (dados["matriz_filial"] == "Matriz")]
         if so_novas:
             lista = lista[lista["recente_12m"]]
-        lista = lista.sort_values("data_inicio", ascending=False)[
-            ["cnpj", "nome_fantasia", "atividade_resumo", "bairro", "cep", "data_inicio"]]
+        colunas_lista = ["cnpj", "nome_fantasia", "atividade_resumo", "bairro", "cep", "data_inicio"]
+        if TEM_REGIME:
+            colunas_lista += ["regime", "porte"]
+        lista = lista.sort_values("data_inicio", ascending=False)[colunas_lista]
         st.caption(f"{br(len(lista))} empresas")
         st.dataframe(lista, hide_index=True, width="stretch", column_config={
             "cnpj": "CNPJ", "nome_fantasia": "Nome fantasia",
             "atividade_resumo": st.column_config.TextColumn("Atividade", width="large"),
-            "bairro": "Bairro", "cep": "CEP",
+            "bairro": "Bairro", "cep": "CEP", "regime": "Regime", "porte": "Porte",
             "data_inicio": st.column_config.DateColumn("Início da atividade", format="DD/MM/YYYY")})
         st.download_button("Baixar lista em CSV (Excel)",
                            lista.rename(columns={"cnpj": "CNPJ", "nome_fantasia": "Nome fantasia",
                                                  "atividade_resumo": "Atividade", "bairro": "Bairro", "cep": "CEP",
-                                                 "data_inicio": "Início da atividade"})
+                                                 "data_inicio": "Início da atividade", "regime": "Regime",
+                                                 "porte": "Porte"})
                            .to_csv(sep=";", index=False, date_format="%d/%m/%Y").encode("utf-8-sig"),
                            file_name="lista_prospeccao_aicitel.csv", mime="text/csv")
 
@@ -354,6 +403,14 @@ with aba5:
         ("Estabelecimentos nos demais bairros da Zona Sul", br(qual["registros_zona_sul"])),
         ("Matrizes (%)", f"{br(qual['matrizes_pct'], 1)}%"),
     ]
+    if TEM_REGIME:
+        linhas += [
+            ("Matrizes optantes pelo MEI (%)", f"{br(qual['mei_pct'], 1)}%"),
+            ("Matrizes no Simples Nacional, exceto MEI (%)", f"{br(qual['simples_exceto_mei_pct'], 1)}%"),
+            ("Matrizes fora do Simples Nacional (%)", f"{br(qual['fora_simples_pct'], 1)}%"),
+        ]
+    if "atualizado_em" in qual:
+        linhas.append(("Última atualização dos dados", f"{pd.Timestamp(qual['atualizado_em']):%d/%m/%Y}"))
     st.dataframe(pd.DataFrame(linhas, columns=["Item", "Valor"]), hide_index=True, width="stretch")
     st.markdown(
         "**Etapas do tratamento**\n\n"
@@ -363,11 +420,19 @@ with aba5:
         "(VL, V, JD, PQ) e devolução dos acentos na exibição.\n"
         "4. Máscaras de CNPJ, CEP e CNAE, descrição oficial de cada CNAE e agrupamento em segmentos.\n"
         "5. Delimitação da área: Vila Olímpia, Itaim Bibi e Vila Nova Conceição pelo nome do bairro; "
-        "Zona Sul pela faixa de CEP 04000-000 a 04999-999.\n\n"
+        "Zona Sul pela faixa de CEP 04000-000 a 04999-999.\n"
+        + ("6. Junção do porte (tabela Empresas) e da opção pelo Simples Nacional e pelo MEI (tabela Simples).\n"
+           if TEM_REGIME else "")
+        + "\n**Atualização**\n\n"
+        "Uma rotina automática no GitHub baixa todo mês a base oficial mais recente da Receita Federal, refaz o "
+        "tratamento e publica os dados novos no painel.\n\n"
         "**Limitações**\n\n"
-        "- A base traz só empresas ativas. Não é possível medir encerramentos.\n"
+        "- O painel considera só empresas ativas. Não mede encerramentos.\n"
         "- Cobre 71 atividades típicas de pequenos negócios, e não todas as atividades econômicas.\n"
-        "- Não informa porte (ME/EPP), opção pelo Simples ou MEI.\n"
-        "- A data usada é a da situação cadastral atual, que para empresas ativas costuma coincidir com o "
-        "início da atividade, mas pode ser posterior em empresas reativadas.\n"
-        "- Telefone, e-mail, razão social e endereço completo não foram usados (LGPD).")
+        + ("- O porte é declarado pela própria empresa e pode estar desatualizado. A Receita não informa se a "
+           "empresa fora do Simples está no Lucro Presumido ou no Lucro Real.\n" if TEM_REGIME else
+           "- Esta base não informa porte (ME/EPP), opção pelo Simples ou MEI.\n")
+        + ("- A data usada é a de início da atividade.\n" if TEM_REGIME else
+           "- A data usada é a da situação cadastral atual, que para empresas ativas costuma coincidir com o "
+           "início da atividade, mas pode ser posterior em empresas reativadas.\n")
+        + "- Telefone, e-mail, razão social e endereço completo não foram usados (LGPD).")

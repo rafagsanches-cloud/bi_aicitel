@@ -18,7 +18,7 @@ A base de clientes do escritório não foi usada. Ela envolve sigilo profissiona
 
 Dados Abertos do CNPJ da Receita Federal, referência setembro de 2026 (registros até 13/09/2026). Como o servidor da Receita não estava acessível no ambiente de desenvolvimento, foi usada a cópia processada e publicada pelo projeto Caça-Cliente no GitHub (`github.com/d1g4odev/caca-cliente-downloads`, release `cnpj-data-2026-09`, arquivo `SP.db`).
 
-Essa cópia tem limitações que afetam a análise. Ela traz só estabelecimentos ativos, então não é possível medir encerramentos. Cobre 71 atividades típicas de pequenos negócios, e não toda a economia. E não informa porte (ME/EPP), opção pelo Simples nem MEI.
+Essa cópia tem limitações que afetam a análise. Ela traz só estabelecimentos ativos, então não é possível medir encerramentos. Cobre 71 atividades típicas de pequenos negócios, e não toda a economia. E não informa porte (ME/EPP), opção pelo Simples nem MEI. Por isso, a rotina de atualização mensal (abaixo) passou a usar os arquivos oficiais da Receita, que trazem essas três informações.
 
 A área de atuação foi dividida em duas regiões. A primeira, "Vila Olímpia e entorno", reúne Vila Olímpia, Itaim Bibi e Vila Nova Conceição, identificados pelo nome do bairro. A segunda, "Demais bairros da Zona Sul", cobre os CEPs de 04000-000 a 04999-999.
 
@@ -75,6 +75,12 @@ O serviço é gratuito e publica direto de um repositório do GitHub.
 4. Clique em **Deploy**. Em poucos minutos o painel fica no ar, com um link para entregar ao professor.
 
 Apps gratuitos entram em repouso depois de alguns dias sem acesso. Quem abrir o link nesse período vê um botão para acordar o app, que volta em menos de um minuto.
+
+## Atualização mensal automática
+
+A rotina `.github/workflows/atualizar-dados.yml` roda no GitHub Actions nos dias 5 e 20 de cada mês. Ela consulta o repositório público da Receita Federal e, quando há uma base nova, baixa os arquivos oficiais (Estabelecimentos, Empresas e Simples), refaz o tratamento com `preparar_dados.py` e grava os dados novos na pasta `dados/`. O Streamlit Community Cloud percebe a mudança no repositório e atualiza o painel sozinho.
+
+Com a base oficial, o painel passa a mostrar o porte de cada empresa e a opção pelo Simples Nacional e pelo MEI. A rotina pode ser disparada à mão em **Actions > Atualizar dados do painel > Run workflow**.
 
 ## Power BI
 
