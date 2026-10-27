@@ -48,14 +48,22 @@ def eixo_cat(titulo: str | None = None, limite: int = 260) -> alt.Axis:
 
 
 @st.cache_data
-def carregar():
+def carregar(versao: str):
+    """versao muda a cada atualização dos dados e obriga o cache a recarregar os arquivos."""
     emp = pd.read_parquet(RAIZ / "dados" / "empresas.parquet")
     cidade = pd.read_parquet(RAIZ / "dados" / "cidade_cnae.parquet")
     qual = json.loads((RAIZ / "dados" / "qualidade.json").read_text(encoding="utf-8"))
     return emp, cidade, qual
 
 
-emp, cidade, qual = carregar()
+def versao_dos_dados() -> str:
+    import hashlib
+    arquivos = ["empresas.parquet", "cidade_cnae.parquet", "qualidade.json"]
+    return hashlib.md5(b"".join((RAIZ / "dados" / a).read_bytes()[-4096:] + str((RAIZ / "dados" / a).stat().st_size).encode()
+                                for a in arquivos)).hexdigest()
+
+
+emp, cidade, qual = carregar(versao_dos_dados())
 referencia = pd.Timestamp(qual["data_referencia"])
 TEM_REGIME = "regime" in emp.columns  # só a base oficial da Receita traz porte, Simples e MEI
 REGIMES = ["MEI", "Simples Nacional (exceto MEI)", "Fora do Simples"]
